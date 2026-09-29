@@ -162,6 +162,166 @@ curl -X POST http://localhost:8000/v1/deadlocks \
 }
 ```
 
+## 必含转移的完成路径：`POST /v1/completions`
+
+请求体与 `POST /v1/deadlocks` 完全相同，额外接受一个可选字段：
+
+- `required_transition_ids`：0～6 个**互异**的现有转移 ID，缺省等价于空列表。
+
+接口从初态出发，在与死锁分析完全相同的一格队列语义下搜索一条路径，使得：
+
+1. 每个 `required_transition_ids` 中的转移至少执行一次；
+2. 路径终点两端均在终态且两个队列都为空；
+3. 完成配置不再扩展。
+
+路径按“转移数最少”优先；同长度下按转移 ID 序列的字典序取第一条。
+响应中的 `visited_states` 是访问过的不同“配置 × 已命中的必含 ID 集合”组合数。
+
+### 可完成时的调用示例
+
+```bash
+curl -X POST http://localhost:8000/v1/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "A": {
+      "states": [0, 1, 2],
+      "initial": 0,
+      "finals": [2]
+    },
+    "B": {
+      "states": [0, 1, 2],
+      "initial": 0,
+      "finals": [2]
+    },
+    "transitions": [
+      {
+        "id": "s1",
+        "from": "A",
+        "to": "B",
+        "action": "send",
+        "message": "m",
+        "source": 0,
+        "target": 1
+      },
+      {
+        "id": "r1",
+        "from": "A",
+        "to": "B",
+        "action": "receive",
+        "message": "m",
+        "source": 0,
+        "target": 1
+      },
+      {
+        "id": "s2",
+        "from": "B",
+        "to": "A",
+        "action": "send",
+        "message": "a",
+        "source": 1,
+        "target": 2
+      },
+      {
+        "id": "r2",
+        "from": "B",
+        "to": "A",
+        "action": "receive",
+        "message": "a",
+        "source": 1,
+        "target": 2
+      }
+    ],
+    "required_transition_ids": ["s2"]
+  }'
+```
+
+示例响应：
+
+```json
+{
+  "completable": true,
+  "visited_states": 5,
+  "initial": {
+    "state": { "A": 0, "B": 0 },
+    "queues": { "A_to_B": null, "B_to_A": null }
+  },
+  "path": [
+    {
+      "index": 1,
+      "transition_id": "s1",
+      "from": "A",
+      "to": "B",
+      "action": "send",
+      "message": "m",
+      "state": { "A": 1, "B": 0 },
+      "queues": { "A_to_B": "m", "B_to_A": null }
+    },
+    {
+      "index": 2,
+      "transition_id": "r1",
+      "from": "A",
+      "to": "B",
+      "action": "receive",
+      "message": "m",
+      "state": { "A": 1, "B": 1 },
+      "queues": { "A_to_B": null, "B_to_A": null }
+    },
+    {
+      "index": 3,
+      "transition_id": "s2",
+      "from": "B",
+      "to": "A",
+      "action": "send",
+      "message": "a",
+      "state": { "A": 1, "B": 2 },
+      "queues": { "A_to_B": null, "B_to_A": "a" }
+    },
+    {
+      "index": 4,
+      "transition_id": "r2",
+      "from": "B",
+      "to": "A",
+      "action": "receive",
+      "message": "a",
+      "state": { "A": 2, "B": 2 },
+      "queues": { "A_to_B": null, "B_to_A": null }
+    }
+  ]
+}
+```
+
+### 无解时的响应
+
+不存在同时满足“命中全部必含 ID”与“到达完成配置”的路径时：
+
+```json
+{
+  "completable": false,
+  "visited_states": 2,
+  "initial": {
+    "state": { "A": 0, "B": 0 },
+    "queues": { "A_to_B": null, "B_to_A": null }
+  },
+  "path": null
+}
+```
+
+### 初态已达标
+
+初态两端已在终态且队列为空、且 `required_transition_ids` 为空时，路径为空数组：
+
+```json
+{
+  "completable": true,
+  "visited_states": 1,
+  "initial": {
+    "state": { "A": 0, "B": 0 },
+    "queues": { "A_to_B": null, "B_to_A": null }
+  },
+  "path": []
+}
+```
+
 ## 请求校验与 422
 
 以下情况返回 HTTP `422 Unprocessable Entity`：
@@ -175,6 +335,14 @@ curl -X POST http://localhost:8000/v1/deadlocks \
 - 不同消息种类超过 8；
 - `from`、`to`、`action` 取值非法，或两端相同；
 - 请求中出现未定义字段、空 ID/消息等越界输入。
+
+`POST /v1/completions` 在以上全部规则之外，额外要求：
+
+- `required_transition_ids` 数量不超过 6；
+- 其中不含重复 ID；
+- 每个 ID 都必须引用请求中已定义的转移。
+
+违反任一条同样返回 `422`。
 
 ## 本地开发（不使用 Docker）
 

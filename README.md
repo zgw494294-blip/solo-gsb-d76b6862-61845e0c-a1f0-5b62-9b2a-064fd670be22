@@ -162,6 +162,124 @@ curl -X POST http://localhost:8000/v1/deadlocks \
 }
 ```
 
+## 带里程碑的完成计划：`POST /v1/completion-plans`
+
+在原有协议请求的基础上增加可选字段 `required_transition_ids`（0～6 个**互异**的现有转移 ID，缺省为 `[]`）。服务在与死锁分析完全相同的可达空间中寻找一条路径，使得：
+
+- 每个指定转移在路径中**至少执行一次**；
+- 路径终点两端均处于终态且两个队列都为空（完成配置不再扩展）。
+
+路径优先选择转移数最少的；长度相同时按转移 ID 序列的字典序取第一条。响应中的 `visited_combinations` 是访问过的不同「配置 × 已命中指定 ID 集合」组合数（同一配置经由不同已命中集合到达会分别计数）。
+
+### 可执行调用示例
+
+```bash
+curl -X POST http://localhost:8000/v1/completion-plans \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "A": {
+      "states": [0, 1],
+      "initial": 0,
+      "finals": [1]
+    },
+    "B": {
+      "states": [0, 1],
+      "initial": 0,
+      "finals": [1]
+    },
+    "transitions": [
+      {
+        "id": "t1",
+        "from": "A",
+        "to": "B",
+        "action": "send",
+        "message": "m",
+        "source": 0,
+        "target": 1
+      },
+      {
+        "id": "t2",
+        "from": "B",
+        "to": "A",
+        "action": "send",
+        "message": "x",
+        "source": 0,
+        "target": 1
+      },
+      {
+        "id": "t3",
+        "from": "B",
+        "to": "A",
+        "action": "receive",
+        "message": "x",
+        "source": 0,
+        "target": 1
+      },
+      {
+        "id": "t4",
+        "from": "A",
+        "to": "B",
+        "action": "receive",
+        "message": "m",
+        "source": 0,
+        "target": 1
+      }
+    ],
+    "required_transition_ids": ["t1"]
+  }'
+```
+
+存在满足条件的路径时（示例中最短路径为 `t1, t4`）：
+
+```json
+{
+  "completable": true,
+  "visited_combinations": 6,
+  "initial": {
+    "state": { "A": 0, "B": 0 },
+    "queues": { "A_to_B": null, "B_to_A": null }
+  },
+  "path": [
+    {
+      "index": 1,
+      "transition_id": "t1",
+      "from": "A",
+      "to": "B",
+      "action": "send",
+      "message": "m",
+      "state": { "A": 1, "B": 0 },
+      "queues": { "A_to_B": "m", "B_to_A": null }
+    },
+    {
+      "index": 2,
+      "transition_id": "t4",
+      "from": "A",
+      "to": "B",
+      "action": "receive",
+      "message": "m",
+      "state": { "A": 1, "B": 1 },
+      "queues": { "A_to_B": null, "B_to_A": null }
+    }
+  ]
+}
+```
+
+无满足条件的路径时，`path` 为 `null`：
+
+```json
+{
+  "completable": false,
+  "visited_combinations": 4,
+  "initial": {
+    "state": { "A": 0, "B": 0 },
+    "queues": { "A_to_B": null, "B_to_A": null }
+  },
+  "path": null
+}
+```
+
+初态本身已满足条件时（例如 `required_transition_ids` 为空且两端已在终态、队列均空），`completable` 为 `true` 且 `path` 为 `[]`，`visited_combinations` 为 `1`。
+
 ## 请求校验与 422
 
 以下情况返回 HTTP `422 Unprocessable Entity`：
@@ -175,6 +293,12 @@ curl -X POST http://localhost:8000/v1/deadlocks \
 - 不同消息种类超过 8；
 - `from`、`to`、`action` 取值非法，或两端相同；
 - 请求中出现未定义字段、空 ID/消息等越界输入。
+
+`POST /v1/completion-plans` 在上述规则之外，以下情况同样返回 `422 Unprocessable Entity`：
+
+- `required_transition_ids` 中出现请求未定义的转移 ID；
+- `required_transition_ids` 中包含重复 ID；
+- `required_transition_ids` 数量超过 6（或包含空 ID）。
 
 ## 本地开发（不使用 Docker）
 

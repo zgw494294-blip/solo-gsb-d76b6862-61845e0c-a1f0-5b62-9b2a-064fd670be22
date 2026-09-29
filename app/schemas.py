@@ -88,6 +88,22 @@ class DeadlockRequest(BaseModel):
         return self
 
 
+class CompletionRequest(DeadlockRequest):
+    required_transition_ids: Annotated[list[NonEmptyId], Field(min_length=0, max_length=6)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_required_transition_ids(self) -> Self:
+        if len(set(self.required_transition_ids)) != len(self.required_transition_ids):
+            raise ValueError("required_transition_ids must not contain duplicates")
+        known = {transition.id for transition in self.transitions}
+        unknown = [transition_id for transition_id in self.required_transition_ids if transition_id not in known]
+        if unknown:
+            raise ValueError(f"unknown required_transition_ids: {unknown}")
+        return self
+
+
 class StateView(BaseModel):
     A: StateId
     B: StateId
@@ -121,4 +137,11 @@ class DeadlockResponse(BaseModel):
     visited_states: int
     initial: ConfigurationView
     deadlock_state: ConfigurationView | None = None
+    path: list[PathStep] | None = None
+
+
+class CompletionResponse(BaseModel):
+    completable: bool
+    visited_combinations: int
+    initial: ConfigurationView
     path: list[PathStep] | None = None
